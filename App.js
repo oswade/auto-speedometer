@@ -13,38 +13,12 @@ export default function App() {
   const [speed, setSpeed] = useState(0);
   const [speedLimit, setSpeedLimit] = useState(null);
   const [unit, setUnit] = useState('km/h');
-  const [isAutoConnected, setIsAutoConnected] = useState(false);
-
-  // Weather states
-  const [currentTemp, setCurrentTemp] = useState(null);
-  const [todayHigh, setTodayHigh] = useState(null);
-  const [todayLow, setTodayLow] = useState(null);
-  const [weatherCondition, setWeatherCondition] = useState(null);
 
   // Battery states
   const [batteryLevel, setBatteryLevel] = useState(null);
-  const [isCharging, setIsCharging] = useState(false);
 
   const subscriptionRef = useRef(null);
   const lastQueryLocation = useRef(null);
-
-  // Detect car connection via charging
-  const checkAndroidAutoConnection = async () => {
-    const powerState = await Battery.getPowerStateAsync();
-    const charging = powerState.batteryState === Battery.BatteryState.CHARGING ||
-                      powerState.batteryState === Battery.BatteryState.FULL;
-
-    setIsCharging(charging);
-    setIsAutoConnected(charging);
-
-    if (charging && !subscriptionRef.current) {
-      startLocationUpdates();
-    } else if (!charging && subscriptionRef.current) {
-      stopLocationUpdates();
-      setSpeed(0);
-      setSpeedLimit(null);
-    }
-  };
 
   // Fetch speed limit from OpenStreetMap
   const fetchSpeedLimit = async (latitude, longitude) => {
@@ -84,36 +58,6 @@ export default function App() {
     }
   };
 
-  // Fetch weather from Open-Meteo
-  const fetchWeather = async (latitude, longitude) => {
-    try {
-      const url = `https://api.open-meteo.com/v1/forecast?latitude=\( {latitude}&longitude= \){longitude}&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min,weather_code&timezone=auto`;
-      const response = await fetch(url);
-      const data = await response.json();
-
-      if (data.current) {
-        const tempC = Math.round(data.current.temperature_2m);
-        setCurrentTemp(unit === 'km/h' ? tempC : Math.round(tempC * 9/5 + 32));
-
-        if (data.daily) {
-          const highC = Math.round(data.daily.temperature_2m_max[0]);
-          const lowC = Math.round(data.daily.temperature_2m_min[0]);
-          setTodayHigh(unit === 'km/h' ? highC : Math.round(highC * 9/5 + 32));
-          setTodayLow(unit === 'km/h' ? lowC : Math.round(lowC * 9/5 + 32));
-        }
-
-        const code = data.current.weather_code;
-        const conditions = {
-          0: 'Clear ☀️', 1: 'Mainly clear ☀️', 2: 'Partly cloudy ⛅', 3: 'Overcast ☁️',
-          45: 'Fog 🌫️', 51: 'Drizzle 🌧️', 61: 'Rain 🌧️', 71: 'Snow ❄️', 95: 'Storm ⛈️'
-        };
-        setWeatherCondition(conditions[code] || 'Weather');
-      }
-    } catch (err) {
-      setWeatherCondition('Unavailable');
-    }
-  };
-
   const startLocationUpdates = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
@@ -135,12 +79,11 @@ export default function App() {
 
         const coords = location.coords;
 
-        // Throttle speed limit & weather queries
+        // Throttle speed limit queries
         if (!lastQueryLocation.current ||
             Location.distanceBetween(lastQueryLocation.current, coords) > 30 ||
             Date.now() - (lastQueryLocation.current.timestamp || 0) > 60000) {
           fetchSpeedLimit(coords.latitude, coords.longitude);
-          fetchWeather(coords.latitude, coords.longitude);
           lastQueryLocation.current = { ...coords, timestamp: Date.now() };
         }
       }
@@ -159,13 +102,8 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Initial check
-    checkAndroidAutoConnection();
-
-    // Monitor battery/charging changes
-    const batterySub = Battery.addBatteryStateListener(({ batteryState }) => {
-      checkAndroidAutoConnection();
-    });
+    // Start location updates immediately on launch
+    startLocationUpdates();
 
     // Monitor battery level
     const levelSub = Battery.addBatteryLevelListener(({ batteryLevel }) => {
@@ -173,48 +111,24 @@ export default function App() {
     });
     Battery.getBatteryLevelAsync().then(level => setBatteryLevel(Math.round(level * 100)));
 
-    // Poll connection every 10 seconds
-    const interval = setInterval(checkAndroidAutoConnection, 10000);
-
     return () => {
-      clearInterval(interval);
-      batterySub.remove();
-      levelSub.remove();
       stopLocationUpdates();
+      levelSub.remove();
     };
   }, [unit]);
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>
-        {isAutoConnected ? 'In Car Mode' : 'Waiting for Car Connection...'}
-      </Text>
-
       <Text style={styles.speed}>{speed}</Text>
       <Text style={styles.unit}>{unit}</Text>
 
-      <Text style={styles.speedLimit}>
-        Speed Limit: {speedLimit !== null ? `${speedLimit} ${unit}` : '--'}
+      <Text style={styles.speedLimitNumber}>
+        {speedLimit !== null ? speedLimit : '--'}
       </Text>
-
-      <View style={styles.weatherSection}>
-        <Text style={styles.weatherTitle}>Weather Today</Text>
-        {currentTemp !== null ? (
-          <>
-            <Text style={styles.currentTemp}>
-              {currentTemp}°{unit === 'km/h' ? 'C' : 'F'}  {weatherCondition}
-            </Text>
-            <Text style={styles.highLow}>
-              High {todayHigh}°  Low {todayLow}°
-            </Text>
-          </>
-        ) : (
-          <Text style={styles.weatherTitle}>Loading weather...</Text>
-        )}
-      </View>
+      <Text style={styles.speedLimitText}>Speed Limit</Text>
 
       <Text style={styles.battery}>
-        Battery: {batteryLevel !== null ? `${batteryLevel}%` : '--'} {isCharging ? '⚡ Charging' : ''}
+        Battery: {batteryLevel !== null ? `${batteryLevel}%` : '--'}
       </Text>
 
       <TouchableOpacity style={styles.button} onPress={toggleUnit}>
@@ -234,12 +148,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 20,
   },
-  title: {
-    color: '#0f0',
-    fontSize: 22,
-    marginBottom: 40,
-    fontWeight: '600',
-  },
   speed: {
     color: '#fff',
     fontSize: 120,
@@ -248,31 +156,18 @@ const styles = StyleSheet.create({
   unit: {
     color: '#aaa',
     fontSize: 40,
-    marginBottom: 20,
+    marginBottom: 40,
   },
-  speedLimit: {
+  speedLimitNumber: {
     color: '#ff9900',
-    fontSize: 36,
-    fontWeight: '600',
-    marginBottom: 40,
-  },
-  weatherSection: {
-    alignItems: 'center',
-    marginBottom: 40,
-  },
-  weatherTitle: {
-    color: '#aaa',
-    fontSize: 20,
-  },
-  currentTemp: {
-    color: '#fff',
-    fontSize: 32,
+    fontSize: 80,
     fontWeight: 'bold',
-    marginVertical: 8,
+    marginBottom: 10,
   },
-  highLow: {
-    color: '#ccc',
-    fontSize: 24,
+  speedLimitText: {
+    color: '#ff9900',
+    fontSize: 32,
+    marginBottom: 60,
   },
   battery: {
     color: '#0f0',
