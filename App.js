@@ -18,7 +18,7 @@ export default function App() {
   const [batteryLevel, setBatteryLevel] = useState(null);
 
   const subscriptionRef = useRef(null);
-  const lastQueryLocation = useRef(null);
+  const lastQueryTime = useRef(null); // For throttling speed limit fetches
 
   // Fetch speed limit from OpenStreetMap
   const fetchSpeedLimit = async (latitude, longitude) => {
@@ -54,6 +54,7 @@ export default function App() {
       }
       setSpeedLimit(null);
     } catch (err) {
+      console.error('Speed limit error:', err);
       setSpeedLimit(null);
     }
   };
@@ -61,15 +62,15 @@ export default function App() {
   const startLocationUpdates = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Permission denied', 'Location needed for speedometer.');
+      Alert.alert('Permission Required', 'Location permission is needed to show speed.');
       return;
     }
 
     subscriptionRef.current = await Location.watchPositionAsync(
       {
         accuracy: Location.Accuracy.High,
-        timeInterval: 1000,
-        distanceInterval: 5,
+        timeInterval: 1000,  // Update every 1 second
+        distanceInterval: 0, // Get updates even with minimal movement
       },
       (location) => {
         const speedMs = location.coords.speed || 0;
@@ -79,12 +80,11 @@ export default function App() {
 
         const coords = location.coords;
 
-        // Throttle speed limit queries
-        if (!lastQueryLocation.current ||
-            Location.distanceBetween(lastQueryLocation.current, coords) > 30 ||
-            Date.now() - (lastQueryLocation.current.timestamp || 0) > 60000) {
+        // Fetch speed limit every 10 seconds
+        const now = Date.now();
+        if (!lastQueryTime.current || now - lastQueryTime.current > 10000) {
           fetchSpeedLimit(coords.latitude, coords.longitude);
-          lastQueryLocation.current = { ...coords, timestamp: Date.now() };
+          lastQueryTime.current = now;
         }
       }
     );
