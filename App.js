@@ -18,9 +18,29 @@ export default function App() {
   const [batteryLevel, setBatteryLevel] = useState(null);
 
   const subscriptionRef = useRef(null);
-  const lastQueryTime = useRef(null); // For throttling speed limit fetches
+  const lastLocationRef = useRef(null);
+  const lastQueryTimeRef = useRef(null);
+  const lastSpeedMsRef = useRef(0); // Store last raw speed for instant unit toggle recalc
 
-  // Fetch speed limit from OpenStreetMap
+  // Simple haversine distance (in meters)
+  const haversineDistance = (coord1, coord2) => {
+    if (!coord1 || !coord2) return 0;
+    const toRad = (value) => (value * Math.PI) / 180;
+    const R = 6371000;
+    const φ1 = toRad(coord1.latitude);
+    const φ2 = toRad(coord2.latitude);
+    const Δφ = toRad(coord2.latitude - coord1.latitude);
+    const Δλ = toRad(coord2.longitude - coord1.longitude);
+
+    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+              Math.cos(φ1) * Math.cos(φ2) *
+              Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return R * c;
+  };
+
+  // Fetch speed limit
   const fetchSpeedLimit = async (latitude, longitude) => {
     try {
       const overpassQuery = `
@@ -69,22 +89,27 @@ export default function App() {
     subscriptionRef.current = await Location.watchPositionAsync(
       {
         accuracy: Location.Accuracy.High,
-        timeInterval: 1000,  // Update every 1 second
-        distanceInterval: 0, // Get updates even with minimal movement
+        timeInterval: 1000,
+        distanceInterval: 0,
       },
       (location) => {
-        const speedMs = location.coords.speed || 0;
-        const speedKmh = Math.max(0, Math.round(speedMs * 3.6));
-        const speedMph = Math.max(0, Math.round(speedMs * 2.23694));
+        const rawSpeedMs = (location.coords.speed > 0 ? location.coords.speed : 0);
+        lastSpeedMsRef.current = rawSpeedMs;
+
+        const speedKmh = Math.max(0, Math.round(rawSpeedMs * 3.6));
+        const speedMph = Math.max(0, Math.round(rawSpeedMs * 2.23694));
         setSpeed(unit === 'km/h' ? speedKmh : speedMph);
 
         const coords = location.coords;
 
-        // Fetch speed limit every 10 seconds
         const now = Date.now();
-        if (!lastQueryTime.current || now - lastQueryTime.current > 10000) {
+        const distanceMoved = lastLocationRef.current ? haversineDistance(lastLocationRef.current, coords) : Infinity;
+        const timeSinceLastQuery = lastQueryTimeRef.current ? now - lastQueryTimeRef.current : Infinity;
+
+        if (distanceMoved > 50 || timeSinceLastQuery > 10000) {
           fetchSpeedLimit(coords.latitude, coords.longitude);
-          lastQueryTime.current = now;
+          lastLocationRef.current = coords;
+          lastQueryTimeRef.current = now;
         }
       }
     );
@@ -98,14 +123,20 @@ export default function App() {
   };
 
   const toggleUnit = () => {
-    setUnit(unit === 'km/h' ? 'mph' : 'km/h');
+    const newUnit = unit === 'km/h' ? 'mph' : 'km/h';
+    setUnit(newUnit);
+
+    // Instant recalc of current speed on toggle (using last known raw speed)
+    const rawSpeedMs = lastSpeedMsRef.current;
+    const speedKmh = Math.max(0, Math.round(rawSpeedMs * 3.6));
+    const speedMph = Math.max(0, Math.round(rawSpeedMs * 2.23694));
+    setSpeed(newUnit === 'km/h' ? speedKmh : speedMph);
   };
 
   useEffect(() => {
-    // Start location updates immediately on launch
+    // Run once on mount — no restart on unit change
     startLocationUpdates();
 
-    // Monitor battery level
     const levelSub = Battery.addBatteryLevelListener(({ batteryLevel }) => {
       setBatteryLevel(Math.round(batteryLevel * 100));
     });
@@ -115,7 +146,7 @@ export default function App() {
       stopLocationUpdates();
       levelSub.remove();
     };
-  }, [unit]);
+  }, []); // Empty dependency array — only once
 
   return (
     <View style={styles.container}>
