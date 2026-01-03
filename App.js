@@ -5,76 +5,46 @@ import {
   StyleSheet,
   TouchableOpacity,
   Alert,
+  Modal,
+  SafeAreaView,
+  StatusBar,
 } from 'react-native';
 import * as Location from 'expo-location';
-import * as Battery from 'expo-battery';
+import { Ionicons } from '@expo/vector-icons';
 
 export default function App() {
   const [speed, setSpeed] = useState(0);
   const [speedLimit, setSpeedLimit] = useState(null);
   const [unit, setUnit] = useState('km/h');
-
-  // Battery states
-  const [batteryLevel, setBatteryLevel] = useState(null);
+  const [isSettingsVisible, setSettingsVisible] = useState(false);
+  const [gpsAccuracy, setGpsAccuracy] = useState(null);
+  const [hideStatusBar, setHideStatusBar] = useState(true);
 
   const subscriptionRef = useRef(null);
-  const lastLocationRef = useRef(null);
   const lastQueryTimeRef = useRef(null);
-  const lastSpeedMsRef = useRef(0); // Store last raw speed for instant unit toggle recalc
+  const speedBufferRef = useRef([]); 
+  const BUFFER_SIZE = 5;
 
-  // Simple haversine distance (in meters)
-  const haversineDistance = (coord1, coord2) => {
-    if (!coord1 || !coord2) return 0;
-    const toRad = (value) => (value * Math.PI) / 180;
-    const R = 6371000;
-    const φ1 = toRad(coord1.latitude);
-    const φ2 = toRad(coord2.latitude);
-    const Δφ = toRad(coord2.latitude - coord1.latitude);
-    const Δλ = toRad(coord2.longitude - coord1.longitude);
+  const MS_TO_KMH = 3.6;
+  const MS_TO_MPH = 2.23694;
 
-    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-              Math.cos(φ1) * Math.cos(φ2) *
-              Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-    return R * c;
-  };
-
-  // Fetch speed limit
   const fetchSpeedLimit = async (latitude, longitude) => {
     try {
-      const overpassQuery = `
-        [out:json];
-        way(around:80,\( {latitude}, \){longitude})["highway"]["maxspeed"];
-        out tags center;
-      `;
-      const response = await fetch('https://overpass-api.de/api/interpreter', {
-        method: 'POST',
-        body: overpassQuery,
-      });
+      const query = `[out:json];way(around:50,${latitude},${longitude})["maxspeed"];out tags;`;
+      const response = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`);
       const data = await response.json();
 
-      if (data.elements && data.elements.length > 0) {
-        const element = data.elements[0];
-        let maxspeed = element.tags.maxspeed;
-        if (maxspeed) {
-          const match = maxspeed.match(/(\d+)\s*(mph|km\/h|kph)?/i);
-          if (match) {
-            let value = parseInt(match[1]);
-            const apiUnit = match[2] ? match[2].toLowerCase() : 'km/h';
-            if (apiUnit.includes('mph')) {
-              value = unit === 'km/h' ? Math.round(value * 1.60934) : value;
-            } else {
-              value = unit === 'mph' ? Math.round(value / 1.60934) : value;
-            }
-            setSpeedLimit(value);
-            return;
-          }
-        }
+      if (data.elements?.length > 0) {
+        const rawLimit = data.elements[0].tags.maxspeed;
+        let numericLimit = parseInt(rawLimit);
+        if (rawLimit.includes('mph')) numericLimit = Math.round(numericLimit * 1.60934);
+        
+        const displayLimit = unit === 'km/h' ? numericLimit : Math.round(numericLimit * 0.621371);
+        setSpeedLimit(displayLimit);
+      } else {
+        setSpeedLimit(null);
       }
-      setSpeedLimit(null);
     } catch (err) {
-      console.error('Speed limit error:', err);
       setSpeedLimit(null);
     }
   };
@@ -82,138 +52,155 @@ export default function App() {
   const startLocationUpdates = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Permission Required', 'Location permission is needed to show speed.');
+      Alert.alert('Permission Denied', 'Location is required.');
       return;
     }
 
     subscriptionRef.current = await Location.watchPositionAsync(
       {
-        accuracy: Location.Accuracy.High,
-        timeInterval: 1000,
+        accuracy: Location.Accuracy.BestForNavigation,
+        timeInterval: 800,
         distanceInterval: 0,
       },
       (location) => {
-        const rawSpeedMs = (location.coords.speed > 0 ? location.coords.speed : 0);
-        lastSpeedMsRef.current = rawSpeedMs;
+        const { speed: rawSpeed, latitude, longitude, accuracy } = location.coords;
+        setGpsAccuracy(Math.round(accuracy));
 
-        const speedKmh = Math.max(0, Math.round(rawSpeedMs * 3.6));
-        const speedMph = Math.max(0, Math.round(rawSpeedMs * 2.23694));
-        setSpeed(unit === 'km/h' ? speedKmh : speedMph);
+        const validSpeed = rawSpeed && rawSpeed > 0 ? rawSpeed : 0;
+        speedBufferRef.current.push(validSpeed);
+        if (speedBufferRef.current.length > BUFFER_SIZE) speedBufferRef.current.shift();
 
-        const coords = location.coords;
+        const sum = speedBufferRef.current.reduce((a, b) => a + b, 0);
+        const averagedSpeedMs = sum / speedBufferRef.current.length;
+
+        const displaySpeed = unit === 'km/h' 
+          ? Math.round(averagedSpeedMs * MS_TO_KMH) 
+          : Math.round(averagedSpeedMs * MS_TO_MPH);
+        
+        setSpeed(displaySpeed);
 
         const now = Date.now();
-        const distanceMoved = lastLocationRef.current ? haversineDistance(lastLocationRef.current, coords) : Infinity;
-        const timeSinceLastQuery = lastQueryTimeRef.current ? now - lastQueryTimeRef.current : Infinity;
-
-        if (distanceMoved > 50 || timeSinceLastQuery > 10000) {
-          fetchSpeedLimit(coords.latitude, coords.longitude);
-          lastLocationRef.current = coords;
+        if (!lastQueryTimeRef.current || now - lastQueryTimeRef.current > 15000) {
+          fetchSpeedLimit(latitude, longitude);
           lastQueryTimeRef.current = now;
         }
       }
     );
   };
 
-  const stopLocationUpdates = () => {
-    if (subscriptionRef.current) {
-      subscriptionRef.current.remove();
-      subscriptionRef.current = null;
-    }
-  };
-
-  const toggleUnit = () => {
-    const newUnit = unit === 'km/h' ? 'mph' : 'km/h';
-    setUnit(newUnit);
-
-    // Instant recalc of current speed on toggle (using last known raw speed)
-    const rawSpeedMs = lastSpeedMsRef.current;
-    const speedKmh = Math.max(0, Math.round(rawSpeedMs * 3.6));
-    const speedMph = Math.max(0, Math.round(rawSpeedMs * 2.23694));
-    setSpeed(newUnit === 'km/h' ? speedKmh : speedMph);
-  };
-
   useEffect(() => {
-    // Run once on mount — no restart on unit change
     startLocationUpdates();
+    return () => subscriptionRef.current?.remove();
+  }, [unit]);
 
-    const levelSub = Battery.addBatteryLevelListener(({ batteryLevel }) => {
-      setBatteryLevel(Math.round(batteryLevel * 100));
-    });
-    Battery.getBatteryLevelAsync().then(level => setBatteryLevel(Math.round(level * 100)));
-
-    return () => {
-      stopLocationUpdates();
-      levelSub.remove();
-    };
-  }, []); // Empty dependency array — only once
+  const isSpeeding = speedLimit && speed > speedLimit;
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.speed}>{speed}</Text>
-      <Text style={styles.unit}>{unit}</Text>
+    <SafeAreaView style={styles.container}>
+      <StatusBar hidden={hideStatusBar} />
+      
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.accuracyText}>GPS: ±{gpsAccuracy}m</Text>
+        </View>
+        <TouchableOpacity onPress={() => setSettingsVisible(true)} style={styles.iconBtn}>
+          <Ionicons name="settings-sharp" size={24} color="#666" />
+        </TouchableOpacity>
+      </View>
 
-      <Text style={styles.speedLimitNumber}>
-        {speedLimit !== null ? speedLimit : '--'}
-      </Text>
-      <Text style={styles.speedLimitText}>Speed Limit</Text>
-
-      <Text style={styles.battery}>
-        Battery: {batteryLevel !== null ? `${batteryLevel}%` : '--'}
-      </Text>
-
-      <TouchableOpacity style={styles.button} onPress={toggleUnit}>
-        <Text style={styles.buttonText}>
-          Switch to {unit === 'km/h' ? 'mph' : 'km/h'}
+      <View style={styles.speedDisplay}>
+        <Text 
+          adjustsFontSizeToFit 
+          numberOfLines={1} 
+          style={[styles.speedText, isSpeeding && styles.speedingText]}
+        >
+          {speed}
         </Text>
-      </TouchableOpacity>
-    </View>
+        <Text style={styles.unitText}>{unit}</Text>
+      </View>
+
+      <View style={styles.footer}>
+        <View style={styles.limitCircle}>
+          <Text style={styles.limitLabel}>MAX</Text>
+          <Text style={styles.limitNumber}>{speedLimit || '--'}</Text>
+        </View>
+      </View>
+
+      <Modal visible={isSettingsVisible} animationType="fade" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>App Settings</Text>
+            
+            <View style={styles.settingRow}>
+              <Text style={styles.settingLabel}>Unit</Text>
+              <TouchableOpacity 
+                style={styles.toggleBtn} 
+                onPress={() => setUnit(unit === 'km/h' ? 'mph' : 'km/h')}
+              >
+                <Text style={styles.toggleBtnText}>{unit.toUpperCase()}</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.settingRow}>
+              <Text style={styles.settingLabel}>Hide Status Bar</Text>
+              <TouchableOpacity 
+                style={styles.toggleBtn} 
+                onPress={() => setHideStatusBar(!hideStatusBar)}
+              >
+                <Text style={styles.toggleBtnText}>{hideStatusBar ? "ON" : "OFF"}</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity style={styles.closeBtn} onPress={() => setSettingsVisible(false)}>
+              <Text style={styles.closeBtnText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000',
+  container: { flex: 1, backgroundColor: '#000' },
+  header: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    paddingHorizontal: 25, 
+    paddingTop: 20 
+  },
+  accuracyText: { color: '#444', fontSize: 12, fontWeight: 'bold' },
+  iconBtn: { padding: 5 },
+  speedDisplay: { flex: 2, justifyContent: 'center', alignItems: 'center' },
+  speedText: { 
+    color: '#fff', 
+    fontSize: 180, // Larger speed
+    fontWeight: '900', 
+    includeFontPadding: false 
+  },
+  speedingText: { color: '#ff4444' },
+  unitText: { color: '#666', fontSize: 32, marginTop: -20, fontWeight: '600' },
+  footer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 40 },
+  limitCircle: {
+    width: 85, // Smaller limit sign
+    height: 85, 
+    borderRadius: 42.5, 
+    borderWidth: 6,
+    borderColor: '#ff4444', 
+    backgroundColor: '#fff',
+    justifyContent: 'center', 
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 20,
   },
-  speed: {
-    color: '#fff',
-    fontSize: 120,
-    fontWeight: 'bold',
-  },
-  unit: {
-    color: '#aaa',
-    fontSize: 40,
-    marginBottom: 40,
-  },
-  speedLimitNumber: {
-    color: '#ff9900',
-    fontSize: 80,
-    fontWeight: 'bold',
-    marginBottom: 10,
-  },
-  speedLimitText: {
-    color: '#ff9900',
-    fontSize: 32,
-    marginBottom: 60,
-  },
-  battery: {
-    color: '#0f0',
-    fontSize: 24,
-    marginBottom: 40,
-    fontWeight: '500',
-  },
-  button: {
-    backgroundColor: '#333',
-    paddingHorizontal: 30,
-    paddingVertical: 15,
-    borderRadius: 30,
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 18,
-  },
+  limitLabel: { fontSize: 10, fontWeight: '900', color: '#000' },
+  limitNumber: { fontSize: 32, fontWeight: '900', color: '#000' },
+  
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', padding: 20 },
+  modalContent: { backgroundColor: '#1c1c1e', padding: 25, borderRadius: 20 },
+  modalTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 25, textAlign: 'center' },
+  settingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  settingLabel: { color: '#ccc', fontSize: 16 },
+  toggleBtn: { backgroundColor: '#333', paddingVertical: 8, paddingHorizontal: 15, borderRadius: 8, minWidth: 70, alignItems: 'center' },
+  toggleBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
+  closeBtn: { backgroundColor: '#fff', padding: 15, borderRadius: 12, alignItems: 'center', marginTop: 10 },
+  closeBtnText: { color: '#000', fontWeight: 'bold', fontSize: 16 }
 });
