@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 export default function App() {
   const [speed, setSpeed] = useState(0);
   const [speedLimit, setSpeedLimit] = useState(null);
+  const [roadName, setRoadName] = useState(null);
   const [unit, setUnit] = useState('km/h');
   const [isSettingsVisible, setSettingsVisible] = useState(false);
   const [gpsAccuracy, setGpsAccuracy] = useState(null);
@@ -30,7 +31,7 @@ export default function App() {
 
   const fetchSpeedLimit = async (latitude, longitude) => {
     try {
-      const query = `[out:json];way(around:50,${latitude},${longitude})["maxspeed"];out tags;`;
+      const query = `[out:json];way(around:50,\( {latitude}, \){longitude})["maxspeed"];out tags;`;
       const response = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`);
       const data = await response.json();
 
@@ -46,6 +47,20 @@ export default function App() {
       }
     } catch (err) {
       setSpeedLimit(null);
+    }
+  };
+
+  const fetchRoadName = async (latitude, longitude) => {
+    try {
+      const addresses = await Location.reverseGeocodeAsync({ latitude, longitude });
+      if (addresses.length > 0) {
+        const { street, name } = addresses[0];
+        setRoadName(street || name || null);
+      } else {
+        setRoadName(null);
+      }
+    } catch (err) {
+      setRoadName(null);
     }
   };
 
@@ -82,6 +97,7 @@ export default function App() {
         const now = Date.now();
         if (!lastQueryTimeRef.current || now - lastQueryTimeRef.current > 15000) {
           fetchSpeedLimit(latitude, longitude);
+          fetchRoadName(latitude, longitude);
           lastQueryTimeRef.current = now;
         }
       }
@@ -101,7 +117,7 @@ export default function App() {
       
       <View style={styles.header}>
         <View>
-          <Text style={styles.accuracyText}>GPS: ±{gpsAccuracy}m</Text>
+          <Text style={styles.accuracyText}>GPS: ±{gpsAccuracy ?? '--'}m</Text>
         </View>
         <TouchableOpacity onPress={() => setSettingsVisible(true)} style={styles.iconBtn}>
           <Ionicons name="settings-sharp" size={24} color="#666" />
@@ -109,6 +125,11 @@ export default function App() {
       </View>
 
       <View style={styles.speedDisplay}>
+        {roadName && (
+          <Text style={styles.roadNameText} numberOfLines={2}>
+            {roadName}
+          </Text>
+        )}
         <Text 
           adjustsFontSizeToFit 
           numberOfLines={1} 
@@ -169,38 +190,53 @@ const styles = StyleSheet.create({
     paddingHorizontal: 25, 
     paddingTop: 20 
   },
-  accuracyText: { color: '#444', fontSize: 12, fontWeight: 'bold' },
+  accuracyText: { color: '#444', fontSize: 14, fontWeight: '400' },
   iconBtn: { padding: 5 },
-  speedDisplay: { flex: 2, justifyContent: 'center', alignItems: 'center' },
+  speedDisplay: { 
+    flex: 1, 
+    justifyContent: 'center', 
+    alignItems: 'center' 
+  },
+  roadNameText: {
+    color: '#aaa',
+    fontSize: 30,
+    fontWeight: '300',
+    textAlign: 'center',
+    paddingHorizontal: 40,
+    marginBottom: 60,
+  },
   speedText: { 
     color: '#fff', 
-    fontSize: 180, // Larger speed
-    fontWeight: '900', 
+    fontSize: 180,
+    fontWeight: '400', 
     includeFontPadding: false 
   },
   speedingText: { color: '#ff4444' },
-  unitText: { color: '#666', fontSize: 32, marginTop: -20, fontWeight: '600' },
-  footer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 40 },
+  unitText: { color: '#666', fontSize: 32, marginTop: -20, fontWeight: '400' },
+  footer: { 
+    alignItems: 'center', 
+    paddingBottom: 60 
+  },
   limitCircle: {
-    width: 85, // Smaller limit sign
+    width: 85,
     height: 85, 
     borderRadius: 42.5, 
     borderWidth: 6,
     borderColor: '#ff4444', 
-    backgroundColor: '#fff',
+    backgroundColor: '#f0f0f0', // slightly gray instead of pure white
     justifyContent: 'center', 
     alignItems: 'center',
   },
-  limitLabel: { fontSize: 10, fontWeight: '900', color: '#000' },
-  limitNumber: { fontSize: 32, fontWeight: '900', color: '#000' },
+  limitLabel: { fontSize: 10, fontWeight: '500', color: '#000' },
+  limitNumber: { fontSize: 32, fontWeight: '600', color: '#000' },
   
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', padding: 20 },
   modalContent: { backgroundColor: '#1c1c1e', padding: 25, borderRadius: 20 },
-  modalTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 25, textAlign: 'center' },
+  modalTitle: { color: '#fff', fontSize: 20, fontWeight: '600', marginBottom: 25, textAlign: 'center' },
   settingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-  settingLabel: { color: '#ccc', fontSize: 16 },
+  settingLabel: { color: '#ccc', fontSize: 16, fontWeight: '400' },
   toggleBtn: { backgroundColor: '#333', paddingVertical: 8, paddingHorizontal: 15, borderRadius: 8, minWidth: 70, alignItems: 'center' },
-  toggleBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
+  toggleBtnText: { color: '#fff', fontWeight: '500', fontSize: 14 },
   closeBtn: { backgroundColor: '#fff', padding: 15, borderRadius: 12, alignItems: 'center', marginTop: 10 },
-  closeBtnText: { color: '#000', fontWeight: 'bold', fontSize: 16 }
+  closeBtnText: { color: '#000', fontWeight: '600', fontSize: 16 }
 });
