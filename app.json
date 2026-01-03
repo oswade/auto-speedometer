@@ -1,43 +1,41 @@
 {
   "expo": {
-    "name": "Auto Speedometer",
-    "slug": "auto-speedometer",
+    "name": "GPS Speedometer and Speed Limit",
+    "slug": "gps-speedometer-speed-limit",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "dark",
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#000000"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.speed.gps.limit.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "This app uses your location to calculate real-time driving speed and fetch local speed limits."
+      }
     },
     "android": {
-      "package": "com.yourname.autospeedometer",
+      "package": "com.speed.gps.limit.app",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#000000"
       },
       "permissions": [
-        "ACCESS_FINE_LOCATION",
-        "FOREGROUND_SERVICE"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.FOREGROUND_SERVICE"
       ]
     },
-    "plugins": [
-      [
-        "expo-location",
-        {
-          "locationAlwaysAndWhenInUsePermission": "Allow $(PRODUCT_NAME) to access location for speedometer."
-        }
-      ]
-    ],
-    "extra": {
-      "eas": {
-        "projectId": "your-project-id-here" // optional, will auto-create
-      }
+    "web": {
+      "favicon": "./assets/favicon.png"
     }
   }
 }
